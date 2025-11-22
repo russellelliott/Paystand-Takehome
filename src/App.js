@@ -1,8 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { GoogleGenAI } from '@google/genai';
+import { useJsApiLoader } from '@react-google-maps/api';
 import './App.css';
 
+const libraries = ['places'];
+
 function App() {
+  const { isLoaded, loadError } = useJsApiLoader({
+    id: 'google-map-script',
+    googleMapsApiKey: process.env.REACT_APP_GOOGLE_MAPS_API_KEY,
+    libraries: libraries
+  });
+
   const [userLocation, setUserLocation] = useState(null);
   const [userCoords, setUserCoords] = useState(null);
   const [distances, setDistances] = useState({});
@@ -12,6 +21,8 @@ function App() {
   const [preferences, setPreferences] = useState('');
   const [recommendations, setRecommendations] = useState({});
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const [parkingData, setParkingData] = useState({});
+  const [loadingParking, setLoadingParking] = useState({});
 
 
   const bayAreaCities = [
@@ -105,6 +116,75 @@ function App() {
   const handleDeselectAll = () => setSelectedCities(new Set());
   const handlePreferencesChange = (e) => setPreferences(e.target.value);
 
+  const findParking = async (address, placeKey) => {
+    if (!isLoaded) {
+      alert('Google Maps API is still loading. Please try again in a moment.');
+      return;
+    }
+
+    if (loadError) {
+      alert('Error loading Google Maps API. Please check your API key configuration.');
+      return;
+    }
+
+    setLoadingParking(prev => ({ ...prev, [placeKey]: true }));
+    
+    try {
+      const geocoder = new window.google.maps.Geocoder();
+      const placesService = new window.google.maps.places.PlacesService(document.createElement('div'));
+      
+      // First, geocode the address to get coordinates
+      const geocodeResult = await new Promise((resolve, reject) => {
+        geocoder.geocode({ address: address }, (results, status) => {
+          if (status === 'OK' && results && results.length > 0) {
+            resolve(results[0]);
+          } else {
+            reject(new Error('Address not found'));
+          }
+        });
+      });
+      
+      const location = geocodeResult.geometry.location;
+      
+      // Then search for nearby parking using Places API
+      const nearbySearchRequest = {
+        location: location,
+        radius: 1000,
+        type: 'parking'
+      };
+      
+      const parkingResults = await new Promise((resolve, reject) => {
+        placesService.nearbySearch(nearbySearchRequest, (results, status) => {
+          if (status === window.google.maps.places.PlacesServiceStatus.OK) {
+            resolve(results || []);
+          } else if (status === window.google.maps.places.PlacesServiceStatus.ZERO_RESULTS) {
+            resolve([]);
+          } else {
+            reject(new Error(`Places API error: ${status}`));
+          }
+        });
+      });
+      
+      const parkingPlaces = parkingResults.slice(0, 5).map(place => ({
+        name: place.name,
+        vicinity: place.vicinity,
+        rating: place.rating || 'No rating',
+        priceLevel: place.price_level ? '$'.repeat(place.price_level) : 'Price not available',
+        openNow: place.opening_hours?.open_now ?? null,
+        placeId: place.place_id
+      }));
+      
+      setParkingData(prev => ({ ...prev, [placeKey]: parkingPlaces }));
+      
+    } catch (error) {
+      console.error('Error finding parking:', error);
+      alert(`Error finding parking: ${error.message}`);
+      setParkingData(prev => ({ ...prev, [placeKey]: [] }));
+    } finally {
+      setLoadingParking(prev => ({ ...prev, [placeKey]: false }));
+    }
+  };
+
 
 
 
@@ -188,6 +268,17 @@ Do not include any explanatory text, markdown formatting, or code blocks. Return
     }
   };
 
+  if (loadError) {
+    return (
+      <div className="App">
+        <header className="App-header">
+          <h1>Bay Area Cities Distance Calculator</h1>
+          <p style={{ color: 'red' }}>Error loading Google Maps API. Please check your API key configuration.</p>
+        </header>
+      </div>
+    );
+  }
+
   return (
     <div className="App">
       <header className="App-header">
@@ -195,6 +286,8 @@ Do not include any explanatory text, markdown formatting, or code blocks. Return
         
         {loading ? (
           <p>Loading location data...</p>
+        ) : !isLoaded ? (
+          <p>Loading Google Maps API...</p>
         ) : (
           <>
             <div style={{ marginBottom: '20px' }}>
@@ -279,11 +372,53 @@ Do not include any explanatory text, markdown formatting, or code blocks. Return
                                   <h5 style={{ margin: '0 0 8px 0', color: '#333', fontSize: '1.1em', fontWeight: 'bold' }}>{place.name}</h5>
                                   <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                                     <span>📍 {place.address}</span>
-
+                                    <button 
+                                      onClick={() => findParking(place.address, `${cityName}-${index}`)}
+                                      disabled={loadingParking[`${cityName}-${index}`]}
+                                      style={{ 
+                                        padding: '6px 12px', 
+                                        backgroundColor: loadingParking[`${cityName}-${index}`] ? '#ccc' : '#4CAF50', 
+                                        color: 'white', 
+                                        border: 'none', 
+                                        borderRadius: '4px', 
+                                        cursor: loadingParking[`${cityName}-${index}`] ? 'not-allowed' : 'pointer',
+                                        fontSize: '12px',
+                                        fontWeight: 'bold'
+                                      }}
+                                    >
+                                      {loadingParking[`${cityName}-${index}`] ? '🔄 Finding...' : '🅿️ Find Parking'}
+                                    </button>
                                   </div>
                                   <p style={{ margin: '8px 0', fontSize: '15px', lineHeight: '1.4', color: '#333' }}>{place.description}</p>
                                   <div style={{ fontSize: '13px', color: '#888', fontStyle: 'italic', borderTop: '1px solid #f0f0f0', paddingTop: '8px', marginBottom: '12px' }}>💡 {place.matchReason}</div>
-
+                                  
+                                  {parkingData[`${cityName}-${index}`] && (
+                                    <div style={{ marginTop: '15px', padding: '12px', backgroundColor: '#f9f9f9', borderRadius: '6px', border: '1px solid #e0e0e0' }}>
+                                      <h6 style={{ margin: '0 0 10px 0', color: '#4CAF50', fontSize: '14px', fontWeight: 'bold' }}>🅿️ Nearby Parking Options:</h6>
+                                      {parkingData[`${cityName}-${index}`].length === 0 ? (
+                                        <p style={{ margin: 0, fontSize: '13px', color: '#666', fontStyle: 'italic' }}>No parking found in the area.</p>
+                                      ) : (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                          {parkingData[`${cityName}-${index}`].map((parking, pIndex) => (
+                                            <div key={pIndex} style={{ fontSize: '13px', padding: '8px', backgroundColor: 'white', borderRadius: '4px', border: '1px solid #ddd' }}>
+                                              <div style={{ fontWeight: 'bold', color: '#333', marginBottom: '4px' }}>{parking.name}</div>
+                                              <div style={{ color: '#666', marginBottom: '2px' }}>📍 {parking.vicinity}</div>
+                                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+                                                <span>
+                                                  ⭐ {parking.rating} | 💰 {parking.priceLevel}
+                                                </span>
+                                                {parking.openNow !== null && (
+                                                  <span style={{ color: parking.openNow ? '#4CAF50' : '#f44336', fontWeight: 'bold' }}>
+                                                    {parking.openNow ? '🟢 Open' : '🔴 Closed'}
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
                               ))}
                             </div>
