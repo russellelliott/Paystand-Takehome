@@ -179,25 +179,70 @@ function App() {
               
               if (status === window.google.maps.places.PlacesServiceStatus.OK && details?.opening_hours) {
                 try {
-                  // Check if it's open 24/7
-                  const periods = details.opening_hours.periods;
-                  const is24x7 = periods && periods.length === 1 && 
-                                periods[0].open && periods[0].open.time === '0000' && 
-                                !periods[0].close;
-                  
-                  if (is24x7) {
-                    isOpen = true;
+                  // First, check if the place has opening hours data
+                  if (details.opening_hours.periods && details.opening_hours.periods.length > 0) {
+                    const periods = details.opening_hours.periods;
+                    
+                    // Check if it's open 24/7
+                    const is24x7 = periods.length === 1 && 
+                                  periods[0].open && periods[0].open.time === '0000' && 
+                                  !periods[0].close;
+                    
+                    if (is24x7) {
+                      isOpen = true;
+                    } else {
+                      // Manual check using periods data since isOpen() is unreliable
+                      const now = new Date();
+                      const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+                      const currentHour = now.getHours();
+                      const currentMinute = now.getMinutes();
+                      const currentTime = currentHour * 100 + currentMinute; // Convert to format like 1430 for 2:30 PM
+                      
+                      // Find all periods for the current day
+                      const todayPeriods = periods.filter(period => 
+                        period.open && period.open.day === currentDay
+                      );
+                      
+                      // Check if we're currently within any of today's open periods
+                      let isCurrentlyOpen = false;
+                      
+                      for (const period of todayPeriods) {
+                        if (!period.open) continue;
+                        
+                        const openTime = parseInt(period.open.time || '0000');
+                        const closeTime = period.close ? parseInt(period.close.time || '2359') : 2359;
+                        
+                        // Handle closing time on the next day (e.g., open until 2 AM)
+                        if (period.close && period.close.day !== currentDay) {
+                          // If close is on next day and current time is after open time
+                          if (currentTime >= openTime) {
+                            isCurrentlyOpen = true;
+                            break;
+                          }
+                        } else {
+                          // Normal case: both open and close on same day
+                          if (currentTime >= openTime && currentTime < closeTime) {
+                            isCurrentlyOpen = true;
+                            break;
+                          }
+                        }
+                      }
+                      
+                      isOpen = isCurrentlyOpen;
+                    }
                   } else {
-                    isOpen = details.opening_hours.isOpen();
+                    console.warn(`No opening hours periods data for parking: ${place.name}`);
+                    isOpen = null;
                   }
                 } catch (error) {
-                  console.warn(`Could not determine opening hours for ${place.name}:`, error);
+                  console.warn(`Error determining opening hours for parking ${place.name}:`, error);
                   isOpen = null;
                 }
               } else {
                 // If we can't get opening hours details, fall back to the original opening_hours data
                 // This handles cases where the place exists but getDetails fails
                 if (place.opening_hours?.open_now !== undefined) {
+                  console.log(`Using fallback open_now for ${place.name}:`, place.opening_hours.open_now);
                   isOpen = place.opening_hours.open_now;
                 } else {
                   isOpen = null;
@@ -269,19 +314,45 @@ function App() {
                     try {
                       // First, check if the place has opening hours data
                       if (details.opening_hours.periods && details.opening_hours.periods.length > 0) {
-                        // Use Google's isOpen() method which handles complex schedules including:
-                        // - Split schedules (lunch/dinner)
-                        // - Holiday hours
-                        // - Special circumstances
-                        if (typeof details.opening_hours.isOpen === 'function') {
-                          isOpen = details.opening_hours.isOpen();
-                        } else {
-                          // If isOpen() is not available, be conservative and don't show status
-                          console.warn(`isOpen() method not available for ${place.name}`);
-                          isOpen = null;
+                        // Manual check using periods data since isOpen() is unreliable
+                        const now = new Date();
+                        const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+                        const currentHour = now.getHours();
+                        const currentMinute = now.getMinutes();
+                        const currentTime = currentHour * 100 + currentMinute; // Convert to format like 1430 for 2:30 PM
+                        
+                        // Find all periods for the current day
+                        const todayPeriods = details.opening_hours.periods.filter(period => 
+                          period.open && period.open.day === currentDay
+                        );
+                        
+                        // Check if we're currently within any of today's open periods
+                        let isCurrentlyOpen = false;
+                        
+                        for (const period of todayPeriods) {
+                          if (!period.open) continue;
+                          
+                          const openTime = parseInt(period.open.time || '0000');
+                          const closeTime = period.close ? parseInt(period.close.time || '2359') : 2359;
+                          
+                          // Handle closing time on the next day (e.g., open until 2 AM)
+                          if (period.close && period.close.day !== currentDay) {
+                            // If close is on next day and current time is after open time
+                            if (currentTime >= openTime) {
+                              isCurrentlyOpen = true;
+                              break;
+                            }
+                          } else {
+                            // Normal case: both open and close on same day
+                            if (currentTime >= openTime && currentTime < closeTime) {
+                              isCurrentlyOpen = true;
+                              break;
+                            }
+                          }
                         }
+                        
+                        isOpen = isCurrentlyOpen;
                       } else {
-                        // No periods data available - could be 24/7 or no hours info
                         console.warn(`No opening hours periods data for ${place.name}`);
                         isOpen = null;
                       }
