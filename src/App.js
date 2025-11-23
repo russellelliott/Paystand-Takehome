@@ -84,25 +84,93 @@ function App() {
       if (location) {
         setUserLocation(location.locationString);
         setUserCoords(location.coords);
-        const cityDistances = {};
-        bayAreaCities.forEach(city => {
-          const distance = calculateDistance(location.coords.lat, location.coords.lng, city.lat, city.lng);
-          const time = calculateDrivingTime(distance);
-          cityDistances[city.name] = {
-            distance: distance.toFixed(1),
-            time: time,
-            timeInMinutes: Math.round(distance / 30 * 60)
-          };
-        });
-        setDistances(cityDistances);
+        
+        // Wait for Google Maps API to load before calculating distances
+        if (isLoaded) {
+          const cityDistances = {};
+          const directionsService = new window.google.maps.DirectionsService();
+          
+          // Calculate driving distances and times for all cities
+          for (const city of bayAreaCities) {
+            try {
+              const result = await new Promise((resolve, reject) => {
+                directionsService.route(
+                  {
+                    origin: new window.google.maps.LatLng(location.coords.lat, location.coords.lng),
+                    destination: new window.google.maps.LatLng(city.lat, city.lng),
+                    travelMode: window.google.maps.TravelMode.DRIVING,
+                  },
+                  (result, status) => {
+                    if (status === 'OK') {
+                      resolve(result);
+                    } else {
+                      reject(new Error(`Directions request failed: ${status}`));
+                    }
+                  }
+                );
+              });
+              
+              const route = result.routes[0];
+              const leg = route.legs[0];
+              const distanceMiles = (leg.distance.value / 1609.34).toFixed(1); // Convert meters to miles
+              const durationMinutes = Math.round(leg.duration.value / 60); // Convert seconds to minutes
+              
+              // Format time display
+              let timeDisplay;
+              if (durationMinutes < 60) {
+                timeDisplay = `${durationMinutes} min`;
+              } else {
+                const hours = Math.floor(durationMinutes / 60);
+                const remainingMins = durationMinutes % 60;
+                timeDisplay = remainingMins > 0 ? `${hours}h ${remainingMins}m` : `${hours}h`;
+              }
+              
+              cityDistances[city.name] = {
+                distance: distanceMiles,
+                time: timeDisplay,
+                timeInMinutes: durationMinutes
+              };
+            } catch (error) {
+              console.error(`Error calculating distance for ${city.name}:`, error);
+              // Fallback to straight-line calculation
+              const distance = calculateDistance(location.coords.lat, location.coords.lng, city.lat, city.lng);
+              const time = calculateDrivingTime(distance);
+              cityDistances[city.name] = {
+                distance: distance.toFixed(1),
+                time: time,
+                timeInMinutes: Math.round(distance / 30 * 60)
+              };
+            }
+          }
+          
+          setDistances(cityDistances);
+        } else {
+          // Fallback to straight-line calculation if Google Maps API not loaded
+          const cityDistances = {};
+          bayAreaCities.forEach(city => {
+            const distance = calculateDistance(location.coords.lat, location.coords.lng, city.lat, city.lng);
+            const time = calculateDrivingTime(distance);
+            cityDistances[city.name] = {
+              distance: distance.toFixed(1),
+              time: time,
+              timeInMinutes: Math.round(distance / 30 * 60)
+            };
+          });
+          setDistances(cityDistances);
+        }
+        
         setSelectedCities(new Set(bayAreaCities.map(city => city.name)));
       } else {
         setUserLocation('Unable to detect location');
       }
       setLoading(false);
     }
-    loadData();
-  }, []);
+    
+    // Only run when isLoaded changes or on mount
+    if (isLoaded !== undefined) {
+      loadData();
+    }
+  }, [isLoaded]);
 
   const handleCityToggle = (cityName) => {
     const newSelectedCities = new Set(selectedCities);
