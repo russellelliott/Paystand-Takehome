@@ -242,7 +242,6 @@ function App() {
                 // If we can't get opening hours details, fall back to the original opening_hours data
                 // This handles cases where the place exists but getDetails fails
                 if (place.opening_hours?.open_now !== undefined) {
-                  console.log(`Using fallback open_now for ${place.name}:`, place.opening_hours.open_now);
                   isOpen = place.opening_hours.open_now;
                 } else {
                   isOpen = null;
