@@ -165,16 +165,59 @@ function App() {
         });
       });
       
-      const parkingPlaces = parkingResults.slice(0, 5).map(place => ({
-        name: place.name,
-        vicinity: place.vicinity,
-        rating: place.rating || 'No rating',
-        priceLevel: place.price_level ? '$'.repeat(place.price_level) : 'Price not available',
-        openNow: place.opening_hours?.open_now ?? null,
-        placeId: place.place_id
-      }));
+      // Get detailed information for each parking place to check if it's open
+      const parkingPlacesWithDetails = await Promise.all(
+        parkingResults.slice(0, 5).map(async (place) => {
+          return new Promise((resolve) => {
+            const request = {
+              placeId: place.place_id,
+              fields: ['opening_hours']
+            };
+            
+            placesService.getDetails(request, (details, status) => {
+              let isOpen = null;
+              
+              if (status === window.google.maps.places.PlacesServiceStatus.OK && details?.opening_hours) {
+                try {
+                  // Check if it's open 24/7
+                  const periods = details.opening_hours.periods;
+                  const is24x7 = periods && periods.length === 1 && 
+                                periods[0].open && periods[0].open.time === '0000' && 
+                                !periods[0].close;
+                  
+                  if (is24x7) {
+                    isOpen = true;
+                  } else {
+                    isOpen = details.opening_hours.isOpen();
+                  }
+                } catch (error) {
+                  console.warn(`Could not determine opening hours for ${place.name}:`, error);
+                  isOpen = null;
+                }
+              } else {
+                // If we can't get opening hours details, fall back to the original opening_hours data
+                // This handles cases where the place exists but getDetails fails
+                if (place.opening_hours?.open_now !== undefined) {
+                  isOpen = place.opening_hours.open_now;
+                } else {
+                  isOpen = null;
+                }
+              }
+              
+              resolve({
+                name: place.name,
+                vicinity: place.vicinity,
+                rating: place.rating || 'No rating',
+                priceLevel: place.price_level ? '$'.repeat(place.price_level) : 'Price not available',
+                openNow: isOpen,
+                placeId: place.place_id
+              });
+            });
+          });
+        })
+      );
       
-      setParkingData(prev => ({ ...prev, [placeKey]: parkingPlaces }));
+      setParkingData(prev => ({ ...prev, [placeKey]: parkingPlacesWithDetails }));
       
     } catch (error) {
       console.error('Error finding parking:', error);
@@ -185,9 +228,100 @@ function App() {
     }
   };
 
-
-
-
+  const enrichWithGooglePlaces = async (geminiRecommendations, cityName) => {
+    if (!isLoaded) return geminiRecommendations;
+    
+    const placesService = new window.google.maps.places.PlacesService(document.createElement('div'));
+    
+    const enrichedRecommendations = await Promise.all(
+      geminiRecommendations.map(async (recommendation) => {
+        return new Promise((resolve) => {
+          // Search for the place using text search
+          const request = {
+            query: `${recommendation.name} ${recommendation.address}`,
+            fields: ['place_id', 'name', 'formatted_address', 'rating', 'price_level', 'opening_hours', 'photos', 'geometry']
+          };
+          
+          placesService.textSearch(request, (results, status) => {
+            if (status === window.google.maps.places.PlacesServiceStatus.OK && results && results.length > 0) {
+              const place = results[0];
+              
+              // Get detailed information including current opening status
+              const detailsRequest = {
+                placeId: place.place_id,
+                fields: ['opening_hours', 'formatted_phone_number', 'website', 'photos']
+              };
+              
+              placesService.getDetails(detailsRequest, (details, detailsStatus) => {
+                let isOpen = null;
+                let website = null;
+                let phone = null;
+                let mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name + ' ' + place.formatted_address)}`;
+                
+                if (detailsStatus === window.google.maps.places.PlacesServiceStatus.OK && details) {
+                  website = details.website;
+                  phone = details.formatted_phone_number;
+                  
+                  // Create direct Google Maps place URL using place_id
+                  mapsUrl = `https://www.google.com/maps/place/?q=place_id:${place.place_id}`;
+                  
+                  if (details.opening_hours) {
+                    try {
+                      // First, check if the place has opening hours data
+                      if (details.opening_hours.periods && details.opening_hours.periods.length > 0) {
+                        // Use Google's isOpen() method which handles complex schedules including:
+                        // - Split schedules (lunch/dinner)
+                        // - Holiday hours
+                        // - Special circumstances
+                        if (typeof details.opening_hours.isOpen === 'function') {
+                          isOpen = details.opening_hours.isOpen();
+                        } else {
+                          // If isOpen() is not available, be conservative and don't show status
+                          console.warn(`isOpen() method not available for ${place.name}`);
+                          isOpen = null;
+                        }
+                      } else {
+                        // No periods data available - could be 24/7 or no hours info
+                        console.warn(`No opening hours periods data for ${place.name}`);
+                        isOpen = null;
+                      }
+                    } catch (error) {
+                      console.warn(`Error determining opening hours for ${place.name}:`, error);
+                      // If there's any error, don't show open/closed status
+                      isOpen = null;
+                    }
+                  }
+                }
+                
+                resolve({
+                  ...recommendation,
+                  // Keep Gemini's description and matchReason
+                  address: place.formatted_address || recommendation.address, // Use Google's formatted address
+                  rating: place.rating || 'No rating',
+                  priceLevel: place.price_level ? '$'.repeat(place.price_level) : 'Price not available',
+                  isOpen: isOpen,
+                  website: website,
+                  phone: phone,
+                  placeId: place.place_id,
+                  geometry: place.geometry,
+                  mapsUrl: mapsUrl,
+                  googlePlaceFound: true
+                });
+              });
+            } else {
+              // If not found in Google Places, keep the original Gemini recommendation
+              resolve({
+                ...recommendation,
+                googlePlaceFound: false
+              });
+            }
+          });
+        });
+      })
+    );
+    
+    return enrichedRecommendations;
+  };
 
   const generateRecommendations = async () => {
     if (!preferences.trim() || selectedCities.size === 0) {
@@ -250,7 +384,9 @@ Do not include any explanatory text, markdown formatting, or code blocks. Return
             parsedRecommendations = [{ name: "Failed to parse recommendations", address: "Please try again", description: "The AI response could not be parsed.", matchReason: "System error" }];
           }
 
-          newRecommendations[cityName] = { recommendations: parsedRecommendations, metadata: groundingMetadata };
+          // Enrich Gemini recommendations with Google Places data
+          const enrichedRecommendations = await enrichWithGooglePlaces(parsedRecommendations, cityName);
+          newRecommendations[cityName] = { recommendations: enrichedRecommendations, metadata: groundingMetadata };
         } catch (error) {
           console.error(`Error generating recommendations for ${cityName}:`, error);
           newRecommendations[cityName] = {
@@ -369,9 +505,47 @@ Do not include any explanatory text, markdown formatting, or code blocks. Return
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                               {places.map((place, index) => (
                                 <div key={index} style={{ backgroundColor: 'white', padding: '15px', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
-                                  <h5 style={{ margin: '0 0 8px 0', color: '#333', fontSize: '1.1em', fontWeight: 'bold' }}>{place.name}</h5>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                                    <h5 style={{ margin: '0', color: '#333', fontSize: '1.1em', fontWeight: 'bold', flex: 1 }}>{place.name}</h5>
+                                    {place.googlePlaceFound && (
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+                                        {place.isOpen !== null && (
+                                          <span style={{ color: place.isOpen ? '#4CAF50' : '#f44336', fontWeight: 'bold' }}>
+                                            {place.isOpen ? '🟢 Open' : '🔴 Closed'}
+                                          </span>
+                                        )}
+                                        <span style={{ color: '#666' }}>⭐ {place.rating}</span>
+                                        <span style={{ color: '#666' }}>💰 {place.priceLevel}</span>
+                                      </div>
+                                    )}
+                                  </div>
                                   <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                                    <span>📍 {place.address}</span>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+                                      <a 
+                                        href={place.mapsUrl || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.address)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{ color: '#1976d2', textDecoration: 'none' }}
+                                        onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                                        onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                                      >
+                                        📍 {place.address}
+                                      </a>
+                                      {place.googlePlaceFound && (
+                                        <div style={{ display: 'flex', gap: '15px', fontSize: '12px', color: '#666' }}>
+                                          {place.phone && (
+                                            <a href={`tel:${place.phone}`} style={{ color: '#1976d2', textDecoration: 'none' }}>
+                                              📞 {place.phone}
+                                            </a>
+                                          )}
+                                          {place.website && (
+                                            <a href={place.website} target="_blank" rel="noopener noreferrer" style={{ color: '#1976d2', textDecoration: 'none' }}>
+                                              🌐 Website
+                                            </a>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
                                     <button 
                                       onClick={() => findParking(place.address, `${cityName}-${index}`)}
                                       disabled={loadingParking[`${cityName}-${index}`]}
@@ -402,7 +576,18 @@ Do not include any explanatory text, markdown formatting, or code blocks. Return
                                           {parkingData[`${cityName}-${index}`].map((parking, pIndex) => (
                                             <div key={pIndex} style={{ fontSize: '13px', padding: '8px', backgroundColor: 'white', borderRadius: '4px', border: '1px solid #ddd' }}>
                                               <div style={{ fontWeight: 'bold', color: '#333', marginBottom: '4px' }}>{parking.name}</div>
-                                              <div style={{ color: '#666', marginBottom: '2px' }}>📍 {parking.vicinity}</div>
+                                              <div style={{ color: '#666', marginBottom: '2px' }}>
+                                                <a 
+                                                  href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parking.name + ' ' + parking.vicinity)}`}
+                                                  target="_blank"
+                                                  rel="noopener noreferrer"
+                                                  style={{ color: '#1976d2', textDecoration: 'none' }}
+                                                  onMouseOver={(e) => e.target.style.textDecoration = 'underline'}
+                                                  onMouseOut={(e) => e.target.style.textDecoration = 'none'}
+                                                >
+                                                  📍 {parking.vicinity}
+                                                </a>
+                                              </div>
                                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
                                                 <span>
                                                   ⭐ {parking.rating} | 💰 {parking.priceLevel}
