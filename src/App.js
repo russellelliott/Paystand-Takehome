@@ -392,9 +392,8 @@ function App() {
       const ai = new GoogleGenAI({ apiKey: process.env.REACT_APP_GEMINI_API_KEY });
       const groundingTool = { googleSearch: {} };
       const selectedCitiesArray = Array.from(selectedCities);
-      const newRecommendations = {};
-
-      for (const cityName of selectedCitiesArray) {
+      
+      const recommendationPromises = selectedCitiesArray.map(async (cityName) => {
         const prompt = `I'm looking for places to visit in ${cityName}, California based on these preferences: "${preferences}". 
 
 Find 3-5 specific, real businesses or locations that are currently open. Use Google Search to get accurate addresses.
@@ -444,15 +443,24 @@ Do not include any explanatory text, markdown formatting, or code blocks. Return
 
           // Enrich Gemini recommendations with Google Places data
           const enrichedRecommendations = await enrichWithGooglePlaces(parsedRecommendations, cityName);
-          newRecommendations[cityName] = { recommendations: enrichedRecommendations, metadata: groundingMetadata };
+          return { cityName, data: enrichedRecommendations, metadata: groundingMetadata };
         } catch (error) {
           console.error(`Error generating recommendations for ${cityName}:`, error);
-          newRecommendations[cityName] = {
-            recommendations: [{ name: "Error generating recommendations", address: "N/A", description: `Unable to generate recommendations for ${cityName}.`, matchReason: "API Error" }],
+          return {
+            cityName,
+            data: [{ name: "Error generating recommendations", address: "N/A", description: `Unable to generate recommendations for ${cityName}.`, matchReason: "API Error" }],
             metadata: null
           };
         }
-      }
+      });
+
+      const results = await Promise.all(recommendationPromises);
+
+      const newRecommendations = {};
+      results.forEach(({ cityName, data, metadata }) => {
+        newRecommendations[cityName] = { recommendations: data, metadata };
+      });
+      
       setRecommendations(newRecommendations);
     } catch (error) {
       console.error('Error with Gemini API:', error);
