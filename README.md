@@ -15,7 +15,7 @@ My implementation for the Paystand Takehome Assignment
 - Get personalized recommendations for selected cities
 - Powered by Google Gemini AI with real-time Google Search
 
-### 🅿️ Parking Finder (NEW!)
+### 🅿️ Parking Finder
 - **Find Parking** button for each recommended place
 - Shows up to 5 nearby parking options within 1000m radius
 - Displays parking details: name, location, rating, price level, and open/closed status
