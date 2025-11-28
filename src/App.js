@@ -182,6 +182,12 @@ function App() {
   const handleSortChange = (e) => setSortBy(e.target.value);
   const handleSelectAll = () => setSelectedCities(new Set(bayAreaCities.map(c => c.name)));
   const handleDeselectAll = () => setSelectedCities(new Set());
+  const handleClearAll = () => {
+    setSelectedCities(new Set());
+    setRecommendations({});
+    setParkingData({});
+    setPreferences('');
+  };
   const handlePreferencesChange = (e) => setPreferences(e.target.value);
 
   const findParking = async (address, placeKey) => {
@@ -488,7 +494,8 @@ Do not include any explanatory text, markdown formatting, or code blocks. Return
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f8f8f8', color: '#333', padding: '15px 20px', borderRadius: '10px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
                 <div>
                   <button onClick={handleSelectAll} style={{ marginRight: '10px', padding: '8px 16px', backgroundColor: '#61dafb', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Show All</button>
-                  <button onClick={handleDeselectAll} style={{ padding: '8px 16px', backgroundColor: '#ff6b6b', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Hide All</button>
+                  <button onClick={handleDeselectAll} style={{ marginRight: '10px', padding: '8px 16px', backgroundColor: '#ff6b6b', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Hide All</button>
+                  <button onClick={handleClearAll} style={{ padding: '8px 16px', backgroundColor: '#9e9e9e', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Clear All</button>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <span>Sort by:</span>
